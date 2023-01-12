@@ -25,6 +25,8 @@ var db *gorm.DB
 type server struct {
 	pb.UnimplementedUserServiceServer
 	pb.UnimplementedLoginServiceServer
+	pb.UnimplementedProductServiceServer
+	//pb.ProductServiceServer
 }
 type User struct {
 	gorm.Model
@@ -102,6 +104,81 @@ func (*server) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginRespon
 		},
 	}, nil
 }
+
+// product servie
+
+type Product struct {
+	gorm.Model
+	Name        string
+	Description string
+	Price       float64
+}
+
+func (*server) CreateProduct(ctx context.Context, req *pb.CreateProductRequest) (*pb.CreateProductResponse, error) {
+	product := Product{
+		Name:        req.GetProductName(),
+		Description: req.GetProductDescription(),
+		Price:       req.GetProductPrice(),
+	}
+	result := db.Create(&product)
+	if result.Error != nil {
+		return nil, status.Errorf(
+			codes.Internal,
+			fmt.Sprintf("internal error %v", result.Error),
+		)
+	}
+	id := product.ID
+	return &pb.CreateProductResponse{
+		Product: &pb.Product{
+			Id:                 uint64(id),
+			ProductName:        product.Name,
+			ProductDescription: product.Description,
+			ProductPrice:       product.Price,
+			CreatedAt:          timestamppb.New(product.CreatedAt),
+			UpdatedAt:          timestamppb.New(product.UpdatedAt),
+		},
+	}, nil
+}
+
+func (*server) GetProducts(ctx context.Context, req *pb.GetProductsRequest) (*pb.GetProductsResponse, error) {
+	var products []Product
+	db.Find(&products)
+	var productspb []*pb.Product
+	for _, product := range products {
+		productspb = append(productspb, ProductToProductpb(&product))
+	}
+	return &pb.GetProductsResponse{
+		Products: productspb,
+	}, nil
+}
+func ProductToProductpb(product *Product) *pb.Product {
+	return &pb.Product{
+		Id:                 uint64(product.ID),
+		ProductName:        product.Name,
+		ProductDescription: product.Description,
+		ProductPrice:       product.Price,
+		CreatedAt:          timestamppb.New(product.CreatedAt),
+		UpdatedAt:          timestamppb.New(product.UpdatedAt),
+	}
+}
+
+func (*server) SearchProduct(ctx context.Context, req *pb.SearchProductRequest) (*pb.SearchProductResponse, error) {
+	var products []Product
+	db.Where("name LIKE ?", "%"+req.GetProductName()+"%").Find(&products)
+	if len(products) == 0 {
+		return nil, status.Errorf(
+			codes.NotFound,
+			fmt.Sprintf("product not found"),
+		)
+	}
+	var productspb []*pb.Product
+	for _, product := range products {
+		productspb = append(productspb, ProductToProductpb(&product))
+	}
+	return &pb.SearchProductResponse{
+		Product: productspb,
+	}, nil
+}
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	d, err := gorm.Open("mysql", "root:@/grpc-ecom?charset=utf8&parseTime=True&loc=Local")
@@ -111,6 +188,7 @@ func main() {
 	}
 	db = d
 	db.AutoMigrate(&User{})
+	db.AutoMigrate(&Product{})
 	lis, err := net.Listen("tcp", "0.0.0.0:50051")
 	if err != nil {
 		log.Fatalf("Faild to listen %v", err)
@@ -119,6 +197,7 @@ func main() {
 	s := grpc.NewServer(opts...)
 	pb.RegisterUserServiceServer(s, &server{})
 	pb.RegisterLoginServiceServer(s, &server{})
+	pb.RegisterProductServiceServer(s, &server{})
 	reflection.Register(s)
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("faild to serve %v", err)
