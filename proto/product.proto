@@ -37,12 +37,37 @@ message SearchProductResponse{
    repeated Product product=1;
 }
 
+message EditProductRequest{
+    uint64 id=1;
+    string ProductName=2;
+    string ProductDescription=3;
+    double ProductPrice=4;
+}
 
+message EditProductResponse{
+  Product product=1;
+}
 
-
+message GetProductByIdRequest{
+    uint64 id=1;
+}
+message GetProductByIdResponse{
+    Product product=1;
+}
+message DeleteProductRequest{
+    uint64 id=1;
+}
+message DeleteProductResponse{
+    string message=1;
+}
 
 service ProductService{
     rpc CreateProduct(CreateProductRequest) returns (CreateProductResponse);
     rpc GetProducts(GetProductsRequest) returns (GetProductsResponse);
     rpc SearchProduct(SearchProductRequest) returns (SearchProductResponse);
+    rpc EditProduct(EditProductRequest) returns (EditProductResponse);
+    rpc DeleteProduct (DeleteProductRequest) returns (DeleteProductResponse);
+    rpc GetProductById(GetProductByIdRequest) returns (GetProductByIdResponse);
 }
+
+

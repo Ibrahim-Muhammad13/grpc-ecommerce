@@ -2,7 +2,6 @@ syntax  ="proto3";
 
 option go_package = "./pb";
 import "google/protobuf/timestamp.proto";
-
 message User {
     uint64 id = 1;
     string name = 2;
@@ -34,10 +33,9 @@ message LoginResponse{
     string token=2;
 }
 
-service LoginService{
-    rpc Login(LoginRequest) returns (LoginResponse);
-}
+
 
 service UserService{
     rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+    rpc Login(LoginRequest) returns (LoginResponse);
 }

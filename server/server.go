@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/Ibrahim-Muhammad13/e-comm/pb"
@@ -15,6 +16,8 @@ import (
 	_ "github.com/jinzhu/gorm/dialects/mysql"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -24,7 +27,6 @@ var db *gorm.DB
 
 type server struct {
 	pb.UnimplementedUserServiceServer
-	pb.UnimplementedLoginServiceServer
 	pb.UnimplementedProductServiceServer
 	//pb.ProductServiceServer
 }
@@ -66,7 +68,6 @@ func (*server) CreateUser(ctx context.Context, req *pb.CreateUserRequest) (*pb.C
 }
 
 func (*server) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginResponse, error) {
-
 	var user User
 	db.Where("name = ?", req.GetName()).First(&user)
 	if user.ID == 0 {
@@ -83,7 +84,7 @@ func (*server) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginRespon
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user": user.ID,
-		"exp":  time.Now().Add(time.Hour * 24).Unix(),
+		"exp":  time.Now().Add(time.Hour).Unix(),
 	})
 	tokenString, err := token.SignedString([]byte(os.Getenv("hmacSampleSecret")))
 	if err != nil {
@@ -92,6 +93,7 @@ func (*server) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginRespon
 			fmt.Sprintf("internal error %v", err),
 		)
 	}
+	fmt.Println(tokenString)
 	return &pb.LoginResponse{
 		Token: tokenString,
 		User: &pb.User{
@@ -105,8 +107,6 @@ func (*server) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginRespon
 	}, nil
 }
 
-// product servie
-
 type Product struct {
 	gorm.Model
 	Name        string
@@ -114,7 +114,52 @@ type Product struct {
 	Price       float64
 }
 
+func Auth(ctx context.Context) bool {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return false
+	}
+	if len(md["auth"]) != 1 {
+		return false
+	}
+	tokenString := md["auth"][0]
+	token, _ := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("Unexpected signing method: %v", token.Header["alg"])
+		}
+
+		return []byte(os.Getenv("hmacSampleSecret")), nil
+	})
+
+	if Claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		fmt.Println(Claims["exp"], "auth")
+		if time.Now().Unix() > int64(Claims["exp"].(float64)) {
+			return false
+		}
+		var user User
+		uid, err := strconv.ParseUint(fmt.Sprintf("%.0f", Claims["user"]), 10, 32)
+		if err != nil {
+			return false
+		}
+		db.First(&user, uint(uid))
+		if user.Role == "Admin" {
+			return true
+		} else {
+			return false
+		}
+
+	} else {
+		fmt.Println("s")
+		return false
+	}
+
+}
+
 func (*server) CreateProduct(ctx context.Context, req *pb.CreateProductRequest) (*pb.CreateProductResponse, error) {
+	isAdmin := Auth(ctx)
+	if !isAdmin {
+		return nil, status.Errorf(codes.Unauthenticated, fmt.Sprintf("you are unauthorized"))
+	}
 	product := Product{
 		Name:        req.GetProductName(),
 		Description: req.GetProductDescription(),
@@ -179,6 +224,81 @@ func (*server) SearchProduct(ctx context.Context, req *pb.SearchProductRequest) 
 		Product: productspb,
 	}, nil
 }
+
+func (*server) EditProduct(ctx context.Context, req *pb.EditProductRequest) (*pb.EditProductResponse, error) {
+	isAdmin := Auth(ctx)
+	if !isAdmin {
+		return nil, status.Errorf(codes.Unauthenticated, fmt.Sprintf("you are unauthorized"))
+	}
+	product := &Product{}
+
+	db.Where("id = ?", req.GetId()).First(&product)
+	if product.ID == 0 {
+		return nil, status.Errorf(
+			codes.NotFound,
+			fmt.Sprintf("product not found"),
+		)
+	}
+	if req.GetProductName() != "" {
+		product.Name = req.GetProductName()
+	}
+	if req.GetProductDescription() != "" {
+		product.Description = req.GetProductDescription()
+	}
+	if req.GetProductPrice() != 0 {
+		product.Price = req.GetProductPrice()
+	}
+
+	result := db.Save(&product)
+	if result.Error != nil {
+		return nil, status.Errorf(
+			codes.Internal,
+			fmt.Sprintf("internal error %v", result.Error),
+		)
+	}
+	return &pb.EditProductResponse{
+		Product: ProductToProductpb(product),
+	}, nil
+}
+
+func (*server) DeleteProduct(ctx context.Context, req *pb.DeleteProductRequest) (*pb.DeleteProductResponse, error) {
+	isAdmin := Auth(ctx)
+	if !isAdmin {
+		return nil, status.Errorf(codes.Unauthenticated, fmt.Sprintf("you are unauthorized"))
+	}
+	product := &Product{}
+	db.Where("id = ?", req.GetId()).First(&product)
+	if product.ID == 0 {
+		return nil, status.Errorf(
+			codes.NotFound,
+			fmt.Sprintf("product not found"),
+		)
+	}
+	result := db.Delete(&product)
+	if result.Error != nil {
+		return nil, status.Errorf(
+			codes.Internal,
+			fmt.Sprintf("internal error %v", result.Error),
+		)
+	}
+	return &pb.DeleteProductResponse{
+		Message: "product deleted",
+	}, nil
+}
+func (*server) GetProductById(ctx context.Context, req *pb.GetProductByIdRequest) (*pb.GetProductByIdResponse, error) {
+	product := &Product{}
+	db.Where("id = ?", req.GetId()).First(&product)
+	if product.ID == 0 {
+		return nil, status.Errorf(
+			codes.NotFound,
+			fmt.Sprintf("product not found"),
+		)
+	}
+	return &pb.GetProductByIdResponse{
+		Product: ProductToProductpb(product),
+	}, nil
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	d, err := gorm.Open("mysql", "root:@/grpc-ecom?charset=utf8&parseTime=True&loc=Local")
@@ -193,10 +313,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Faild to listen %v", err)
 	}
-	opts := []grpc.ServerOption{}
-	s := grpc.NewServer(opts...)
+	s := grpc.NewServer()
 	pb.RegisterUserServiceServer(s, &server{})
-	pb.RegisterLoginServiceServer(s, &server{})
 	pb.RegisterProductServiceServer(s, &server{})
 	reflection.Register(s)
 	if err := s.Serve(lis); err != nil {
